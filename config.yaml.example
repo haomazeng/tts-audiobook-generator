@@ -1,0 +1,23 @@
+# Aliyun CosyVoice API Configuration
+aliyun:
+  api_key: "your_api_key_here"
+  api_endpoint: "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation"
+
+# TTS Settings
+tts:
+  model: "cosyvoice-v1"
+  voice: "zhixiaobai"  # Professional announcer style
+  # Options: zhixiaobai, longwan, zhichu, etc.
+
+# Audio Output Settings
+audio:
+  format: "mp3"
+  bitrate: "64k"
+  sample_rate: 24000
+
+# Processing Settings
+processing:
+  max_concurrent: 5  # Concurrent API requests
+  chunk_size: 500    # Characters per API request
+  retry_attempts: 3
+  retry_delay: 2     # Seconds
