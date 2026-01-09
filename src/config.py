@@ -16,9 +16,9 @@ class Config:
     # Aliyun settings
     aliyun_api_key: str
 
-    # TTS settings
-    tts_model: str = "cosyvoice-v1"
-    tts_voice: str = "zhixiaobai"
+    # TTS settings (Qwen-TTS-Realtime)
+    tts_model: str = "qwen3-tts-flash-realtime"
+    tts_voice: str = "Cherry"
 
     # Audio settings
     audio_format: str = "mp3"

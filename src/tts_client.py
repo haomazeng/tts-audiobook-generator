@@ -1,13 +1,16 @@
 """
-TTS Client using Aliyun DashScope SDK for CosyVoice.
+TTS Client using Aliyun DashScope Qwen-TTS-Realtime.
+This provides larger free tier quota.
 """
 import asyncio
+import base64
+import threading
 import logging
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
 import dashscope
-from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
+from dashscope.audio.qwen_tts_realtime import QwenTtsRealtime, QwenTtsRealtimeCallback, AudioFormat
 
 logger = logging.getLogger(__name__)
 
@@ -17,43 +20,25 @@ class TTSRequestError(Exception):
     pass
 
 
-class CosyVoiceClient:
+class QwenTTSRealtimeClient:
     """
-    Async client for Aliyun CosyVoice TTS API using DashScope SDK.
+    Async client for Aliyun Qwen-TTS-Realtime using DashScope SDK.
+    Uses WebSocket for streaming audio synthesis.
     """
-
-    # Model to voice mapping
-    VOICE_MAP_V1 = {
-        "zhixiaobai": "longxiaobai",
-        "longwan": "longwan",
-        "zhichu": "longxiaochun",
-        "longcheng": "longcheng",
-        "longhua": "longhua",
-        "longshu": "longshu",
-    }
-
-    # Voice options that support v1 and v2
-    VOICE_MAP_V2 = {
-        "zhixiaobai": "longxiaobai_v2",
-        "longwan": "longwan_v2",
-        "zhichu": "longxiaochun_v2",
-        "longcheng": "longcheng_v2",
-        "longhua": "longhua_v2",
-        "longshu": "longshu_v2",
-        "longxiaobai": "longxiaobai_v2",
-    }
 
     def __init__(
         self,
         api_key: str,
-        model: str = "cosyvoice-v1",
-        voice: str = "zhixiaobai",
+        model: str = "qwen3-tts-flash-realtime",
+        voice: str = "Cherry",
+        sample_rate: int = 24000,
         retry_attempts: int = 3,
         retry_delay: float = 2.0
     ):
         self.api_key = api_key
         self.model = model
-        self.voice = self._map_voice(voice, model)
+        self.voice = voice
+        self.sample_rate = sample_rate
         self.retry_attempts = retry_attempts
         self.retry_delay = retry_delay
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -61,55 +46,116 @@ class CosyVoiceClient:
         # Set API key for DashScope
         dashscope.api_key = api_key
 
-    def _map_voice(self, voice: str, model: str) -> str:
-        """Map legacy voice names to actual voice IDs based on model version."""
-        if model == "cosyvoice-v2":
-            return self.VOICE_MAP_V2.get(voice, voice)
-        else:
-            return self.VOICE_MAP_V1.get(voice, voice)
+        # Audio data storage
+        self.audio_chunks = []
+        self.complete_event = threading.Event()
+        self.qwen_tts = None
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.qwen_tts:
+            try:
+                self.qwen_tts.close()
+            except:
+                pass
         self.executor.shutdown(wait=True)
+
+    class _Callback(QwenTtsRealtimeCallback):
+        """Internal callback class for Qwen TTS Realtime."""
+
+        def __init__(self, parent):
+            super().__init__()
+            self.parent = parent
+
+        def on_open(self) -> None:
+            logger.info("WebSocket connection opened")
+
+        def on_close(self, close_status_code, close_msg) -> None:
+            logger.info(f"WebSocket closed: {close_status_code} - {close_msg}")
+
+        def on_event(self, response: dict) -> None:
+            try:
+                event_type = response.get('type', '')
+
+                if event_type == 'session.created':
+                    logger.info(f"Session created: {response['session']['id']}")
+
+                elif event_type == 'response.audio.delta':
+                    # Decode base64 audio and store
+                    audio_b64 = response.get('delta', '')
+                    audio_data = base64.b64decode(audio_b64)
+                    self.parent.audio_chunks.append(audio_data)
+                    logger.debug(f"Received audio chunk: {len(audio_data)} bytes")
+
+                elif event_type == 'response.audio.done':
+                    logger.info("Audio generation complete")
+
+                elif event_type == 'response.done':
+                    logger.info(f"Response done: {self.parent.qwen_tts.get_last_response_id() if self.parent.qwen_tts else 'N/A'}")
+
+                elif event_type == 'session.finished':
+                    logger.info("Session finished")
+                    self.parent.complete_event.set()
+
+            except Exception as e:
+                logger.error(f"Error processing event: {e}")
 
     def _synthesize_sync(self, text: str) -> bytes:
         """
-        Synchronous synthesis using DashScope SDK.
+        Synchronous synthesis using QwenTtsRealtime.
         Must be run in a thread pool to avoid blocking.
         """
         try:
-            logger.info(f"DashScope: Synthesizing {len(text)} chars with {self.model}/{self.voice}")
+            logger.info(f"Qwen-TTS: Synthesizing {len(text)} chars with {self.model}/{self.voice}")
 
-            # Map audio format based on model - all models require explicit format
-            if self.model == "cosyvoice-v2":
-                audio_format = AudioFormat.MP3_24000HZ_MONO_256KBPS
-            else:
-                # v1 also needs explicit format
-                audio_format = AudioFormat.MP3_24000HZ_MONO_256KBPS
+            # Clear previous audio data
+            self.audio_chunks.clear()
+            self.complete_event.clear()
 
-            # Create synthesizer
-            synthesizer = SpeechSynthesizer(
+            # Create callback
+            callback = self._Callback(self)
+
+            # Create TTS instance
+            self.qwen_tts = QwenTtsRealtime(
                 model=self.model,
-                voice=self.voice,
-                format=audio_format
+                callback=callback,
+                url='wss://dashscope.aliyuncs.com/api-ws/v1/realtime'
             )
 
-            # Synthesize
-            audio = synthesizer.call(text)
+            # Connect
+            self.qwen_tts.connect()
 
-            logger.info(f"DashScope: Successfully synthesized {len(audio)} bytes")
-            return audio
+            # Configure session
+            self.qwen_tts.update_session(
+                voice=self.voice,
+                response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+                mode='commit'  # Use commit mode for batch processing
+            )
+
+            # Send text
+            self.qwen_tts.append_text(text)
+            self.qwen_tts.commit()
+
+            # Wait for completion
+            self.complete_event.wait(timeout=120)  # 2 minute timeout
+            self.qwen_tts.finish()
+
+            # Combine all audio chunks
+            audio_data = b''.join(self.audio_chunks)
+
+            logger.info(f"Qwen-TTS: Successfully synthesized {len(audio_data)} bytes")
+            return audio_data
 
         except Exception as e:
-            logger.error(f"DashScope synthesis failed: {e}")
-            raise TTSRequestError(f"DashScope error: {e}")
+            logger.error(f"Qwen-TTS synthesis failed: {e}")
+            raise TTSRequestError(f"Qwen-TTS error: {e}")
 
     async def synthesize(self, text: str) -> bytes:
         """
         Synthesize text to audio with retry logic.
-        Returns audio data as bytes.
+        Returns audio data as bytes (PCM format).
         """
         last_error = None
 
@@ -141,3 +187,7 @@ class CosyVoiceClient:
                     await asyncio.sleep(self.retry_delay)
 
         raise TTSRequestError(f"Failed after {self.retry_attempts} attempts: {last_error}")
+
+
+# Keep backward compatibility
+CosyVoiceClient = QwenTTSRealtimeClient

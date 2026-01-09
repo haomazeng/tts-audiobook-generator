@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 )
 @click.option(
     '--voice',
-    type=click.Choice(['zhixiaobai', 'longwan', 'zhichu', 'aiqi', 'zhichu_v2']),
-    default='zhixiaobai',
-    help='Voice type for TTS'
+    type=str,
+    default=None,
+    help='Voice type for TTS (uses config.yaml default if not specified)'
 )
 @click.option(
     '--no-resume',
@@ -80,7 +80,7 @@ def main(
             cfg = Config.load_defaults()
 
         # Override with CLI options
-        if voice:
+        if voice is not None:
             cfg.tts_voice = voice
 
         # Validate config

@@ -25,28 +25,26 @@ class AudioProcessor:
     def save_audio_segment(self, audio_data: bytes, output_path: str) -> None:
         """
         Save raw audio data to file.
-        Note: pydub needs file-like object or path for raw data.
+        Supports PCM raw data from Qwen-TTS-Realtime.
         """
-        # Create AudioSegment from raw data
-        # Assuming PCM data from API, convert to AudioSegment
         try:
-            # Write temp file first
-            temp_path = Path(output_path).with_suffix('.tmp')
-            with open(temp_path, 'wb') as f:
-                f.write(audio_data)
+            # Qwen-TTS-Realtime returns raw PCM data
+            # PCM_24000HZ_MONO_16BIT: 24000Hz, mono, 16-bit (sample_width=2)
+            audio = AudioSegment(
+                data=audio_data,
+                sample_width=2,  # 16-bit
+                frame_rate=self.sample_rate,  # 24000 Hz
+                channels=1  # mono
+            )
 
-            # Load and export with proper settings
-            audio = AudioSegment.from_file(temp_path)
+            # Export to target format (MP3)
             audio.export(
                 output_path,
                 format=self.format,
                 bitrate=self.bitrate
             )
 
-            # Clean up temp
-            temp_path.unlink()
-
-            logger.info(f"Saved audio to {output_path}")
+            logger.info(f"Saved audio to {output_path} ({len(audio_data)} bytes)")
 
         except Exception as e:
             logger.error(f"Failed to save audio: {e}")

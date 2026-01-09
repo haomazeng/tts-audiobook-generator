@@ -1,13 +1,12 @@
-# Aliyun CosyVoice API Configuration
+# Aliyun Qwen-TTS-Realtime API Configuration
+# Using Qwen-TTS-Realtime for larger free tier quota
 aliyun:
   api_key: "your_api_key_here"
-  api_endpoint: "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation"
 
 # TTS Settings
 tts:
-  model: "cosyvoice-v1"
-  voice: "zhixiaobai"  # Professional announcer style
-  # Options: zhixiaobai, longwan, zhichu, etc.
+  model: "qwen3-tts-flash-realtime"  # Qwen TTS Realtime model
+  voice: "Cherry"  # Popular voice options: Cherry, Serena, Ethan, Chelsie, etc.
 
 # Audio Output Settings
 audio:
@@ -17,7 +16,7 @@ audio:
 
 # Processing Settings
 processing:
-  max_concurrent: 5  # Concurrent API requests
-  chunk_size: 500    # Characters per API request
+  max_concurrent: 1  # WebSocket is single connection per session
+  chunk_size: 2000   # Characters per API request (max 2000)
   retry_attempts: 3
   retry_delay: 2     # Seconds
