@@ -28,3 +28,4 @@ audiobooks/
 # Progress files
 *.progress
 *.log
+test.md
