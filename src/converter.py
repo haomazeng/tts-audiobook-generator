@@ -81,7 +81,7 @@ class AudioConverter:
         audio_files = []
         async with CosyVoiceClient(
             api_key=self.config.aliyun_api_key,
-            api_endpoint=self.config.aliyun_api_endpoint,
+            model=self.config.tts_model,
             voice=self.config.tts_voice,
             retry_attempts=self.config.retry_attempts,
             retry_delay=self.config.retry_delay

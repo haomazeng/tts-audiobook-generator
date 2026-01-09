@@ -1,10 +1,14 @@
-import aiohttp
+"""
+TTS Client using Aliyun DashScope SDK for CosyVoice.
+"""
 import asyncio
-import base64
-from typing import Optional, Dict, Any
 import logging
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor
 
-logging.basicConfig(level=logging.INFO)
+import dashscope
+from dashscope.audio.tts_v2 import SpeechSynthesizer, AudioFormat
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,79 +19,92 @@ class TTSRequestError(Exception):
 
 class CosyVoiceClient:
     """
-    Async client for Aliyun CosyVoice TTS API.
+    Async client for Aliyun CosyVoice TTS API using DashScope SDK.
     """
+
+    # Model to voice mapping
+    VOICE_MAP_V1 = {
+        "zhixiaobai": "longxiaobai",
+        "longwan": "longwan",
+        "zhichu": "longxiaochun",
+        "longcheng": "longcheng",
+        "longhua": "longhua",
+        "longshu": "longshu",
+    }
+
+    # Voice options that support v1 and v2
+    VOICE_MAP_V2 = {
+        "zhixiaobai": "longxiaobai_v2",
+        "longwan": "longwan_v2",
+        "zhichu": "longxiaochun_v2",
+        "longcheng": "longcheng_v2",
+        "longhua": "longhua_v2",
+        "longshu": "longshu_v2",
+        "longxiaobai": "longxiaobai_v2",
+    }
 
     def __init__(
         self,
         api_key: str,
-        api_endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation",
         model: str = "cosyvoice-v1",
         voice: str = "zhixiaobai",
         retry_attempts: int = 3,
         retry_delay: float = 2.0
     ):
         self.api_key = api_key
-        self.api_endpoint = api_endpoint
         self.model = model
-        self.voice = voice
+        self.voice = self._map_voice(voice, model)
         self.retry_attempts = retry_attempts
         self.retry_delay = retry_delay
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.executor = ThreadPoolExecutor(max_workers=1)
+
+        # Set API key for DashScope
+        dashscope.api_key = api_key
+
+    def _map_voice(self, voice: str, model: str) -> str:
+        """Map legacy voice names to actual voice IDs based on model version."""
+        if model == "cosyvoice-v2":
+            return self.VOICE_MAP_V2.get(voice, voice)
+        else:
+            return self.VOICE_MAP_V1.get(voice, voice)
 
     async def __aenter__(self):
-        self.session = aiohttp.ClientSession()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
+        self.executor.shutdown(wait=True)
 
-    def _get_headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+    def _synthesize_sync(self, text: str) -> bytes:
+        """
+        Synchronous synthesis using DashScope SDK.
+        Must be run in a thread pool to avoid blocking.
+        """
+        try:
+            logger.info(f"DashScope: Synthesizing {len(text)} chars with {self.model}/{self.voice}")
 
-    def _build_payload(self, text: str) -> Dict[str, Any]:
-        return {
-            "model": self.model,
-            "input": {
-                "text": text
-            },
-            "parameters": {
-                "text_type": "PlainText",
-                "voice": self.voice
-            }
-        }
+            # Map audio format based on model - all models require explicit format
+            if self.model == "cosyvoice-v2":
+                audio_format = AudioFormat.MP3_24000HZ_MONO_256KBPS
+            else:
+                # v1 also needs explicit format
+                audio_format = AudioFormat.MP3_24000HZ_MONO_256KBPS
 
-    async def _make_request(self, text: str) -> Dict[str, Any]:
-        """Make a single API request."""
-        if not self.session:
-            raise RuntimeError("Client not initialized. Use 'async with' context manager.")
+            # Create synthesizer
+            synthesizer = SpeechSynthesizer(
+                model=self.model,
+                voice=self.voice,
+                format=audio_format
+            )
 
-        headers = self._get_headers()
-        payload = self._build_payload(text)
+            # Synthesize
+            audio = synthesizer.call(text)
 
-        logger.info(f"Sending TTS request for text length: {len(text)}")
+            logger.info(f"DashScope: Successfully synthesized {len(audio)} bytes")
+            return audio
 
-        async with self.session.post(
-            self.api_endpoint,
-            headers=headers,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=60)
-        ) as response:
-            if response.status == 429:
-                retry_after = int(response.headers.get("Retry-After", 5))
-                logger.warning(f"Rate limited. Retrying after {retry_after}s")
-                await asyncio.sleep(retry_after)
-                raise TTSRequestError("Rate limited, retry required")
-
-            if response.status != 200:
-                error_text = await response.text()
-                raise TTSRequestError(f"API error {response.status}: {error_text}")
-
-            return await response.json()
+        except Exception as e:
+            logger.error(f"DashScope synthesis failed: {e}")
+            raise TTSRequestError(f"DashScope error: {e}")
 
     async def synthesize(self, text: str) -> bytes:
         """
@@ -98,22 +115,19 @@ class CosyVoiceClient:
 
         for attempt in range(self.retry_attempts):
             try:
-                response = await self._make_request(text)
+                # Run blocking SDK call in thread pool
+                loop = asyncio.get_event_loop()
+                audio_data = await loop.run_in_executor(
+                    self.executor,
+                    self._synthesize_sync,
+                    text
+                )
 
-                # Extract base64 audio data
-                if "output" not in response or "audio" not in response["output"]:
-                    raise TTSRequestError(f"Invalid response format: {response}")
-
-                audio_base64 = response["output"]["audio"]
-                audio_data = base64.b64decode(audio_base64)
-
-                logger.info(f"Successfully synthesized {len(text)} chars -> {len(audio_data)} bytes")
                 return audio_data
 
             except TTSRequestError as e:
                 last_error = e
-                if "Rate limited" in str(e) and attempt < self.retry_attempts - 1:
-                    # Exponential backoff
+                if attempt < self.retry_attempts - 1:
                     wait_time = self.retry_delay * (2 ** attempt)
                     logger.info(f"Retry {attempt + 1}/{self.retry_attempts} after {wait_time}s")
                     await asyncio.sleep(wait_time)

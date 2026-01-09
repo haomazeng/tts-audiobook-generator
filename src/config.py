@@ -15,7 +15,6 @@ class Config:
 
     # Aliyun settings
     aliyun_api_key: str
-    aliyun_api_endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/generation"
 
     # TTS settings
     tts_model: str = "cosyvoice-v1"
@@ -28,7 +27,7 @@ class Config:
 
     # Processing settings
     max_concurrent: int = 5
-    chunk_size: int = 500
+    chunk_size: int = 2000  # Max 2000 chars per Aliyun API request
     retry_attempts: int = 3
     retry_delay: float = 2.0
 
@@ -51,7 +50,6 @@ class Config:
 
         return cls(
             aliyun_api_key=os.getenv('ALIYUN_API_KEY', aliyun.get('api_key')),
-            aliyun_api_endpoint=aliyun.get('api_endpoint', cls.aliyun_api_endpoint),
             tts_model=tts.get('model', cls.tts_model),
             tts_voice=tts.get('voice', cls.tts_voice),
             audio_format=audio.get('format', cls.audio_format),
@@ -68,7 +66,6 @@ class Config:
         """Load config with defaults, environment variables can override."""
         return cls(
             aliyun_api_key=os.getenv('ALIYUN_API_KEY', ''),
-            aliyun_api_endpoint=os.getenv('ALIYUN_API_ENDPOINT', cls.aliyun_api_endpoint),
             tts_voice=os.getenv('TTS_VOICE', cls.tts_voice),
             audio_bitrate=os.getenv('AUDIO_BITRATE', cls.audio_bitrate)
         )
